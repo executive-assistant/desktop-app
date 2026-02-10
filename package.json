@@ -1,0 +1,53 @@
+{
+  "name": "ken-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 1420 --strictPort",
+    "dev:e2e": "vite --host 127.0.0.1 --port 4173 --strictPort",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "lint": "eslint . --ext ts,tsx --max-warnings 0",
+    "lint:fix": "eslint . --ext ts,tsx --fix",
+    "test": "vitest",
+    "test:ci": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:local": "LOCALHOST_E2E=1 playwright test e2e/localhost.integration.spec.ts --workers=1",
+    "test:e2e:headed": "playwright test --headed",
+    "test:rust": "cd src-tauri && cargo test",
+    "fmt:rust:check": "cd src-tauri && cargo fmt -- --check",
+    "fmt:rust": "cd src-tauri && cargo fmt",
+    "clippy": "cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings",
+    "check:rust": "cd src-tauri && cargo check",
+    "check": "npm run lint && npm run test:ci && npm run build && npm run fmt:rust:check && npm run clippy && npm run test:rust && npm run check:rust",
+    "hooks:install": "git config core.hooksPath .githooks"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
+    "@playwright/test": "^1.52.0",
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^16.0.1",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "@vitest/coverage-v8": "^2.1.9",
+    "@eslint/js": "^9.22.0",
+    "eslint": "^9.22.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^16.0.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.26.1",
+    "vite": "^5.4.9",
+    "vitest": "^2.1.9"
+  }
+}
