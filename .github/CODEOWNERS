@@ -1,0 +1,11 @@
+# Default owner for all files.
+* @executive-assistant
+
+# Rust/Tauri and security-sensitive logic.
+/src-tauri/** @executive-assistant
+/src/hooks/** @executive-assistant
+/src/components/AuthPanel.tsx @executive-assistant
+/AGENTS.md @executive-assistant
+/TESTING.md @executive-assistant
+/IMPLEMENTATION_BACKLOG.md @executive-assistant
+
