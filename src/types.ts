@@ -55,3 +55,10 @@ export interface PendingApproval {
   method?: string;
   payload?: Record<string, unknown>;
 }
+
+export interface ThreadWorkspaceInfo {
+  threadId: string;
+  rootPath: string;
+  threadPath: string;
+  created: boolean;
+}

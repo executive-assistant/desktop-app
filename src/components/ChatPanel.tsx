@@ -4,9 +4,10 @@ import type { ConnectionProfile } from "../types";
 
 type ChatPanelProps = {
   profile: ConnectionProfile | undefined;
+  threadId: string;
 };
 
-export function ChatPanel({ profile }: ChatPanelProps) {
+export function ChatPanel({ profile, threadId }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const {
     messages,
@@ -37,6 +38,9 @@ export function ChatPanel({ profile }: ChatPanelProps) {
 
       <p className="subtle-text">
         Target: <strong>{profile?.baseUrl ?? "No profile selected"}</strong>
+      </p>
+      <p className="subtle-text">
+        Thread: <strong>{threadId}</strong>
       </p>
 
       {hasInterruptedMessages ? (
