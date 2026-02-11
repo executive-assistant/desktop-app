@@ -1,7 +1,9 @@
 import { AuthPanel } from "./components/AuthPanel";
 import { ChatPanel } from "./components/ChatPanel";
+import { FileSyncPanel } from "./components/FileSyncPanel";
 import { ProfileManager } from "./components/ProfileManager";
 import { ThreadWorkspacePanel } from "./components/ThreadWorkspacePanel";
+import { useFileSync } from "./hooks/useFileSync";
 import { useProfiles } from "./hooks/useProfiles";
 import { useThreadWorkspace } from "./hooks/useThreadWorkspace";
 
@@ -24,6 +26,14 @@ function App() {
     addThread,
     selectThread
   } = useThreadWorkspace();
+  const {
+    isSyncing,
+    syncError,
+    operations,
+    lastAppliedCursor,
+    lastServerTimeUtc,
+    syncNow
+  } = useFileSync(selectedProfile, selectedThreadId);
 
   return (
     <div className="app-shell">
@@ -60,6 +70,15 @@ function App() {
         </aside>
         <section className="content">
           <ChatPanel profile={selectedProfile} threadId={selectedThreadId} />
+          <FileSyncPanel
+            threadId={selectedThreadId}
+            isSyncing={isSyncing}
+            syncError={syncError}
+            operations={operations}
+            lastAppliedCursor={lastAppliedCursor}
+            lastServerTimeUtc={lastServerTimeUtc}
+            onSyncNow={syncNow}
+          />
         </section>
       </main>
     </div>

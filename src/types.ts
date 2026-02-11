@@ -62,3 +62,28 @@ export interface ThreadWorkspaceInfo {
   threadPath: string;
   created: boolean;
 }
+
+export interface FileManifestItem {
+  path: string;
+  tombstone: boolean;
+  cursor?: string;
+}
+
+export interface FileManifestPage {
+  items: FileManifestItem[];
+  nextCursor?: string;
+  hasMore: boolean;
+  serverTimeUtc?: string;
+}
+
+export type FileSyncOperationType = "download" | "delete";
+export type FileSyncOperationStatus = "running" | "success" | "error";
+
+export interface FileSyncOperation {
+  id: string;
+  path: string;
+  operation: FileSyncOperationType;
+  status: FileSyncOperationStatus;
+  retryCount: number;
+  detail?: string;
+}

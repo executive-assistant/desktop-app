@@ -3,6 +3,7 @@ import type { AuthTokens, ThreadWorkspaceInfo } from "../types";
 
 const BROWSER_AUTH_PREFIX = "ken.desktop.browserAuth.v1";
 const BROWSER_WORKSPACE_PREFIX = "ken.desktop.browserWorkspace.v1";
+const BROWSER_FILE_PREFIX = "ken.desktop.browserFile.v1";
 const BROWSER_WORKSPACE_ROOT = "~/Executive Assistant/Ken";
 
 function isBrowserFallbackAllowed(): boolean {
@@ -18,6 +19,10 @@ function authStorageKey(profileId: string): string {
 
 function workspaceStorageKey(threadId: string): string {
   return `${BROWSER_WORKSPACE_PREFIX}.${threadId}`;
+}
+
+function fileStorageKey(threadId: string, relativePath: string): string {
+  return `${BROWSER_FILE_PREFIX}.${threadId}.${encodeURIComponent(relativePath)}`;
 }
 
 function parseAuthPayload(raw: string | null): AuthTokens | null {
@@ -47,6 +52,35 @@ function readStringArg(args: Record<string, unknown> | undefined, field: string)
     throw new Error(`${field} is required.`);
   }
   return value;
+}
+
+function sanitizeRelativePath(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("relativePath is required.");
+  }
+  if (trimmed.startsWith("/")) {
+    throw new Error("Absolute file paths are not allowed.");
+  }
+
+  const segments = trimmed.split("/").map((segment) => segment.trim());
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error("Parent directory navigation is not allowed in file paths.");
+  }
+  return segments.join("/");
+}
+
+function normalizeBytes(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    throw new Error("bytes is required.");
+  }
+  return value.map((item) => {
+    const numeric = Number(item);
+    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 255) {
+      throw new Error("bytes contains invalid byte values.");
+    }
+    return numeric;
+  });
 }
 
 function browserFallbackInvoke(command: string, args: Record<string, unknown> | undefined): unknown {
@@ -107,6 +141,21 @@ function browserFallbackInvoke(command: string, args: Record<string, unknown> | 
     return payload;
   }
 
+  if (command === "sync_write_thread_file") {
+    const threadId = normalizeThreadId(readStringArg(args, "threadId"));
+    const relativePath = sanitizeRelativePath(readStringArg(args, "relativePath"));
+    const bytes = normalizeBytes(args?.bytes);
+    localStorage.setItem(fileStorageKey(threadId, relativePath), JSON.stringify(bytes));
+    return null;
+  }
+
+  if (command === "sync_delete_thread_file") {
+    const threadId = normalizeThreadId(readStringArg(args, "threadId"));
+    const relativePath = sanitizeRelativePath(readStringArg(args, "relativePath"));
+    localStorage.removeItem(fileStorageKey(threadId, relativePath));
+    return null;
+  }
+
   throw new Error(`Unsupported browser fallback command: ${command}`);
 }
 
@@ -125,7 +174,9 @@ export async function invokeSafe<T>(
       command === "load_auth_tokens" ||
       command === "save_auth_tokens" ||
       command === "clear_auth_tokens" ||
-      command === "ensure_thread_workspace"
+      command === "ensure_thread_workspace" ||
+      command === "sync_write_thread_file" ||
+      command === "sync_delete_thread_file"
     ) {
       return browserFallbackInvoke(command, args) as T;
     }
