@@ -65,5 +65,39 @@ describe("invokeSafe", () => {
       })
     ).rejects.toThrow("Tauri unavailable");
   });
-});
 
+  it("falls back to browser mode for ensure_thread_workspace and marks first create", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("Tauri unavailable"));
+    const first = await invokeSafe<{
+      threadId: string;
+      rootPath: string;
+      threadPath: string;
+      created: boolean;
+    }>("ensure_thread_workspace", {
+      threadId: "thread-1"
+    });
+
+    expect(first).toEqual({
+      threadId: "thread-1",
+      rootPath: "~/Executive Assistant/Ken",
+      threadPath: "~/Executive Assistant/Ken/thread-1",
+      created: true
+    });
+
+    invokeMock.mockRejectedValueOnce(new Error("Tauri unavailable"));
+    const second = await invokeSafe<{
+      threadId: string;
+      rootPath: string;
+      threadPath: string;
+      created: boolean;
+    }>("ensure_thread_workspace", {
+      threadId: "thread-1"
+    });
+    expect(second.created).toBe(false);
+  });
+
+  it("throws when ensure_thread_workspace fallback is missing threadId", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("Tauri unavailable"));
+    await expect(invokeSafe("ensure_thread_workspace", {})).rejects.toThrow("threadId is required");
+  });
+});

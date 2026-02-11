@@ -17,13 +17,18 @@ test("critical path: profile + auth + streaming chat", async ({ page }) => {
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Ken Desktop POC" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Thread Workspaces" })).toBeVisible();
+  await expect(page.getByText("Workspace:")).toContainText(
+    "~/Executive Assistant/Ken/thread-default",
+    { timeout: 10_000 }
+  );
 
   await page.getByRole("button", { name: "New" }).click();
   await page.getByLabel("Name").fill("Remote QA");
   await page.getByLabel("Type").selectOption("remote");
   await page.getByLabel("Base URL").fill("https://ken.example.com");
   await page.getByRole("button", { name: "Create" }).click();
-  await expect(page.locator(".profile-list")).toContainText("Remote QA");
+  await expect(page.locator(".sidebar .panel").first().locator(".profile-list")).toContainText("Remote QA");
 
   const localDevItem = page.locator(".profile-item", { hasText: "Local Dev" });
   await localDevItem.getByRole("button", { name: "Select" }).click();

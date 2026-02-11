@@ -18,7 +18,9 @@ test.describe("localhost integration", () => {
     await page.getByLabel("Type").selectOption("local_dev");
     await page.getByLabel("Base URL").fill(profileBaseUrl);
     await page.getByRole("button", { name: "Create" }).click();
-    await expect(page.locator(".profile-list")).toContainText("Localhost Proxy");
+    await expect(page.locator(".sidebar .panel").first().locator(".profile-list")).toContainText(
+      "Localhost Proxy"
+    );
 
     const prompt = `localhost integration ping ${Date.now()}`;
     await page.getByPlaceholder("Send a message to /message endpoint").fill(prompt);
