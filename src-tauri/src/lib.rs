@@ -1,7 +1,7 @@
 use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const KEYCHAIN_SERVICE: &str = "ken-desktop";
 
@@ -60,6 +60,43 @@ fn home_directory() -> Result<PathBuf, String> {
 
 fn workspace_root_path(home_directory: &Path) -> PathBuf {
     home_directory.join("Executive Assistant").join("Ken")
+}
+
+fn thread_workspace_path(thread_id: &str) -> Result<PathBuf, String> {
+    let normalized_thread_id = normalize_thread_id(thread_id).ok_or_else(|| {
+        "Thread ID is required and can only contain letters, numbers, '.', '_' or '-'.".to_string()
+    })?;
+    let home = home_directory()?;
+    Ok(workspace_root_path(&home).join(normalized_thread_id))
+}
+
+fn sanitize_relative_path(raw_path: &str) -> Result<PathBuf, String> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err("File path is required.".to_string());
+    }
+
+    let candidate = Path::new(trimmed);
+    if candidate.is_absolute() {
+        return Err("Absolute file paths are not allowed.".to_string());
+    }
+
+    let mut sanitized = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::Normal(value) => sanitized.push(value),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err("Parent directory navigation is not allowed in file paths.".to_string())
+            }
+        }
+    }
+
+    if sanitized.components().next().is_none() {
+        return Err("File path is required.".to_string());
+    }
+
+    Ok(sanitized)
 }
 
 fn workspace_create_error(path: &Path, error: std::io::Error) -> String {
@@ -159,7 +196,7 @@ fn ensure_thread_workspace(thread_id: String) -> Result<ThreadWorkspaceInfo, Str
 
     let home = home_directory()?;
     let root_path = workspace_root_path(&home);
-    let thread_path = root_path.join(&normalized_thread_id);
+    let thread_path = thread_workspace_path(&normalized_thread_id)?;
     let already_exists = thread_path.exists();
 
     fs::create_dir_all(&thread_path)
@@ -173,6 +210,53 @@ fn ensure_thread_workspace(thread_id: String) -> Result<ThreadWorkspaceInfo, Str
     })
 }
 
+#[tauri::command]
+fn sync_write_thread_file(
+    thread_id: String,
+    relative_path: String,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    let thread_path = thread_workspace_path(&thread_id)?;
+    let relative = sanitize_relative_path(&relative_path)?;
+    let full_path = thread_path.join(relative);
+
+    if let Some(parent_directory) = full_path.parent() {
+        fs::create_dir_all(parent_directory)
+            .map_err(|error| workspace_create_error(parent_directory, error))?;
+    }
+
+    fs::write(&full_path, bytes)
+        .map_err(|error| format!("Unable to write file {}: {error}", full_path.display()))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn sync_delete_thread_file(thread_id: String, relative_path: String) -> Result<(), String> {
+    let thread_path = thread_workspace_path(&thread_id)?;
+    let relative = sanitize_relative_path(&relative_path)?;
+    let full_path = thread_path.join(relative);
+
+    if full_path.is_dir() {
+        fs::remove_dir_all(&full_path).map_err(|error| {
+            format!(
+                "Unable to delete directory {}: {error}",
+                full_path.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    match fs::remove_file(&full_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Unable to delete file {}: {error}",
+            full_path.display()
+        )),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -180,7 +264,9 @@ pub fn run() {
             save_auth_tokens,
             load_auth_tokens,
             clear_auth_tokens,
-            ensure_thread_workspace
+            ensure_thread_workspace,
+            sync_write_thread_file,
+            sync_delete_thread_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -189,8 +275,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        account_name, normalize_thread_id, normalize_token, workspace_create_error,
-        workspace_root_path,
+        account_name, normalize_thread_id, normalize_token, sanitize_relative_path,
+        workspace_create_error, workspace_root_path,
     };
     use std::path::Path;
 
@@ -244,5 +330,20 @@ mod tests {
 
         assert!(error.contains("Grant Files and Folders access"));
         assert!(error.contains("System Settings"));
+    }
+
+    #[test]
+    fn sanitize_relative_path_accepts_safe_relative_paths() {
+        let path = sanitize_relative_path("documents/report.txt").expect("path should be valid");
+        assert_eq!(path.to_string_lossy(), "documents/report.txt");
+    }
+
+    #[test]
+    fn sanitize_relative_path_rejects_parent_directory_navigation() {
+        let result = sanitize_relative_path("../secrets.txt");
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("error should exist")
+            .contains("Parent directory navigation"));
     }
 }

@@ -100,4 +100,35 @@ describe("invokeSafe", () => {
     invokeMock.mockRejectedValueOnce(new Error("Tauri unavailable"));
     await expect(invokeSafe("ensure_thread_workspace", {})).rejects.toThrow("threadId is required");
   });
+
+  it("falls back to browser mode for sync file write/delete commands", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("Tauri unavailable"));
+    await invokeSafe("sync_write_thread_file", {
+      threadId: "thread-1",
+      relativePath: "docs/readme.txt",
+      bytes: [65, 66, 67]
+    });
+
+    const key = "ken.desktop.browserFile.v1.thread-1.docs%2Freadme.txt";
+    expect(localStorage.getItem(key)).toBe("[65,66,67]");
+
+    invokeMock.mockRejectedValueOnce(new Error("Tauri unavailable"));
+    await invokeSafe("sync_delete_thread_file", {
+      threadId: "thread-1",
+      relativePath: "docs/readme.txt"
+    });
+
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it("rejects unsafe relative paths for sync file fallback commands", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("Tauri unavailable"));
+    await expect(
+      invokeSafe("sync_write_thread_file", {
+        threadId: "thread-1",
+        relativePath: "../secrets.txt",
+        bytes: [1]
+      })
+    ).rejects.toThrow("Parent directory navigation is not allowed");
+  });
 });
