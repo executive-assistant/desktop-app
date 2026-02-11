@@ -43,3 +43,15 @@ export interface TimelineEvent {
   createdAt: string;
   detail?: string;
 }
+
+export type ApprovalDecision = "approve" | "reject";
+
+export interface PendingApproval {
+  id: string;
+  action: string;
+  detail?: string;
+  createdAt: string;
+  endpoint?: string;
+  method?: string;
+  payload?: Record<string, unknown>;
+}

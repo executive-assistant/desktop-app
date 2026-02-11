@@ -183,6 +183,26 @@ button:disabled {
   font-size: 0.88rem;
 }
 
+.approval-panel {
+  border: 1px solid #f0d9a4;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff9ef;
+  display: grid;
+  gap: 8px;
+}
+
+.approval-panel h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .error-text {
   margin: 0;
   color: #b11717;
