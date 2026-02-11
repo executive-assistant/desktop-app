@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { readJson, writeJson } from "../lib/storage";
 import { invokeSafe } from "../lib/tauri";
 import type {
+  ApprovalDecision,
   AuthTokens,
   ChatMessage,
   ChatMessageStatus,
   ConnectionProfile,
+  PendingApproval,
   TimelineEvent,
   TimelineKind,
   TimelineStatus
@@ -27,6 +29,134 @@ function createId(prefix: string): string {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function stringifyDetail(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildActionableErrorDetail(raw: unknown): string | undefined {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+  }
+
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const payload = raw as Record<string, unknown>;
+  const message = asString(payload.message)?.trim();
+  const code = asString(payload.code)?.trim();
+  const retryable = asBoolean(payload.retryable);
+  const details = stringifyDetail(payload.details);
+
+  const parts: string[] = [];
+  if (message) {
+    parts.push(message);
+  }
+  if (code) {
+    parts.push(`Code: ${code}.`);
+  }
+  if (retryable === true) {
+    parts.push("Retryable: yes.");
+  }
+  if (retryable === false) {
+    parts.push("Retryable: no. Not retryable without changes.");
+  }
+  if (details) {
+    parts.push(`Details: ${details}`);
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+function parseTimestamp(raw: unknown): string | undefined {
+  if (typeof raw === "string") {
+    const parsed = Date.parse(raw);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+    return undefined;
+  }
+
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    // Support either unix seconds or milliseconds.
+    const asMilliseconds = raw > 10_000_000_000 ? raw : raw * 1000;
+    const parsed = Date.parse(new Date(asMilliseconds).toISOString());
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+  }
+
+  return undefined;
+}
+
+function timelineCreatedAt(payload: Record<string, unknown>): string {
+  const candidates = [
+    payload.created_at,
+    payload.createdAt,
+    payload.timestamp,
+    payload.updated_at,
+    payload.updatedAt
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseTimestamp(candidate);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return new Date().toISOString();
+}
+
+function earliestCreatedAt(first: string, second: string): string {
+  const firstParsed = Date.parse(first);
+  const secondParsed = Date.parse(second);
+
+  if (Number.isNaN(firstParsed)) {
+    return second;
+  }
+  if (Number.isNaN(secondParsed)) {
+    return first;
+  }
+  return firstParsed <= secondParsed ? first : second;
+}
+
+function sortTimelineEvents(events: TimelineEvent[]): TimelineEvent[] {
+  return events
+    .map((event, index) => ({ event, index }))
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.event.createdAt);
+      const rightTime = Date.parse(right.event.createdAt);
+      const leftValid = !Number.isNaN(leftTime);
+      const rightValid = !Number.isNaN(rightTime);
+
+      if (leftValid && rightValid && leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      if (leftValid !== rightValid) {
+        return leftValid ? -1 : 1;
+      }
+      return left.index - right.index;
+    })
+    .map(({ event }) => event);
 }
 
 function normalizeTimelineStatus(raw: unknown): TimelineStatus | undefined {
@@ -81,12 +211,26 @@ function inferTimelineKind(payload: Record<string, unknown>, eventType?: string)
 }
 
 function eventDetail(payload: Record<string, unknown>): string | undefined {
-  const detailCandidates = [payload.detail, payload.message, payload.error];
-  for (const candidate of detailCandidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate;
-    }
+  const explicitDetail = stringifyDetail(payload.detail);
+  if (explicitDetail) {
+    return explicitDetail;
   }
+
+  const nestedError = buildActionableErrorDetail(payload.error);
+  if (nestedError) {
+    return nestedError;
+  }
+
+  const standardError = buildActionableErrorDetail(payload);
+  if (standardError) {
+    return standardError;
+  }
+
+  const fallbackMessage = stringifyDetail(payload.message);
+  if (fallbackMessage) {
+    return fallbackMessage;
+  }
+
   return undefined;
 }
 
@@ -101,6 +245,144 @@ function eventName(kind: TimelineKind, payload: Record<string, unknown>, eventTy
     return eventType;
   }
   return kind === "tool" ? "tool_update" : kind === "stage" ? "stage_update" : "system_update";
+}
+
+function normalizeHttpMethod(value: unknown): string | undefined {
+  const method = asString(value)?.trim().toUpperCase();
+  if (!method) {
+    return undefined;
+  }
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    return method;
+  }
+  return undefined;
+}
+
+function isApprovalSignalPayload(payload: Record<string, unknown>, eventType?: string): boolean {
+  const normalizedEvent = eventType?.toLowerCase();
+  if (normalizedEvent?.includes("approval")) {
+    return true;
+  }
+
+  if (payload.approval_required === true || payload.requires_approval === true) {
+    return true;
+  }
+
+  const type = asString(payload.type)?.toLowerCase();
+  if (type === "approval" || type === "approval_required" || type === "approval_request") {
+    return true;
+  }
+
+  const approvalObject = payload.approval;
+  if (approvalObject && typeof approvalObject === "object") {
+    return true;
+  }
+
+  return false;
+}
+
+function buildSingleApprovalRequest(
+  payload: Record<string, unknown>,
+  eventType?: string
+): PendingApproval | null {
+  if (!isApprovalSignalPayload(payload, eventType)) {
+    return null;
+  }
+
+  const approvalObject =
+    payload.approval && typeof payload.approval === "object"
+      ? (payload.approval as Record<string, unknown>)
+      : payload;
+
+  const id =
+    asString(approvalObject.approval_id) ??
+    asString(payload.approval_id) ??
+    asString(approvalObject.id) ??
+    asString(payload.id) ??
+    createId("approval");
+
+  const action =
+    asString(approvalObject.action) ??
+    asString(approvalObject.name) ??
+    asString(approvalObject.tool) ??
+    asString(approvalObject.stage) ??
+    asString(payload.action) ??
+    "risky_action";
+
+  const detailCandidates = [
+    approvalObject.detail,
+    approvalObject.message,
+    approvalObject.reason,
+    approvalObject.description,
+    payload.detail,
+    payload.message
+  ];
+  let detail: string | undefined;
+  for (const candidate of detailCandidates) {
+    detail = stringifyDetail(candidate);
+    if (detail) {
+      break;
+    }
+  }
+
+  const endpoint =
+    asString(approvalObject.endpoint) ??
+    asString(approvalObject.approval_endpoint) ??
+    asString(payload.approval_endpoint);
+
+  const method = normalizeHttpMethod(approvalObject.method) ?? normalizeHttpMethod(payload.method);
+
+  const contextPayload =
+    approvalObject.payload && typeof approvalObject.payload === "object"
+      ? (approvalObject.payload as Record<string, unknown>)
+      : approvalObject.details && typeof approvalObject.details === "object"
+        ? (approvalObject.details as Record<string, unknown>)
+        : undefined;
+
+  return {
+    id,
+    action,
+    detail,
+    createdAt: timelineCreatedAt(approvalObject),
+    endpoint,
+    method,
+    payload: contextPayload
+  };
+}
+
+function buildApprovalRequests(payload: Record<string, unknown>, eventType?: string): PendingApproval[] {
+  const requests: PendingApproval[] = [];
+
+  if (Array.isArray(payload.events)) {
+    for (const item of payload.events) {
+      if (item && typeof item === "object") {
+        const request = buildSingleApprovalRequest(item as Record<string, unknown>, eventType);
+        if (request) {
+          requests.push(request);
+        }
+      }
+    }
+  }
+
+  const fromRoot = buildSingleApprovalRequest(payload, eventType);
+  if (fromRoot) {
+    requests.push(fromRoot);
+  }
+
+  return requests;
+}
+
+function toAbsoluteEndpoint(baseUrl: string, endpoint?: string): string {
+  if (!endpoint) {
+    return `${baseUrl}/approval`;
+  }
+  if (endpoint.startsWith("http://") || endpoint.startsWith("https://")) {
+    return endpoint;
+  }
+  if (endpoint.startsWith("/")) {
+    return `${baseUrl}${endpoint}`;
+  }
+  return `${baseUrl}/${endpoint}`;
 }
 
 function buildSingleTimelineEvent(
@@ -118,7 +400,7 @@ function buildSingleTimelineEvent(
     kind,
     name: eventName(kind, payload, eventType),
     status,
-    createdAt: new Date().toISOString(),
+    createdAt: timelineCreatedAt(payload),
     detail: eventDetail(payload)
   };
 }
@@ -185,16 +467,17 @@ type ParsedDataLine = {
   text: string;
   done: boolean;
   timelineEvents: TimelineEvent[];
+  approvalRequests: PendingApproval[];
 };
 
 function parseDataLine(rawPayload: string, eventType?: string): ParsedDataLine {
   const payload = rawPayload.trim();
   if (!payload) {
-    return { text: "", done: false, timelineEvents: [] };
+    return { text: "", done: false, timelineEvents: [], approvalRequests: [] };
   }
 
   if (payload === "[DONE]") {
-    return { text: "", done: true, timelineEvents: [] };
+    return { text: "", done: true, timelineEvents: [], approvalRequests: [] };
   }
 
   try {
@@ -202,10 +485,11 @@ function parseDataLine(rawPayload: string, eventType?: string): ParsedDataLine {
     return {
       text: readTokenField(parsed),
       done: parsed.done === true,
-      timelineEvents: buildTimelineEvents(parsed, eventType)
+      timelineEvents: buildTimelineEvents(parsed, eventType),
+      approvalRequests: buildApprovalRequests(parsed, eventType)
     };
   } catch {
-    return { text: payload, done: false, timelineEvents: [] };
+    return { text: payload, done: false, timelineEvents: [], approvalRequests: [] };
   }
 }
 
@@ -226,12 +510,16 @@ export function useChat(profile: ConnectionProfile | undefined) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [isSending, setIsSending] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const [isDecidingApproval, setIsDecidingApproval] = useState(false);
   const [hydratedProfileId, setHydratedProfileId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!profile) {
       setMessages([]);
       setTimeline([]);
+      setPendingApproval(null);
+      setIsDecidingApproval(false);
       setHydratedProfileId(null);
       return;
     }
@@ -244,6 +532,8 @@ export function useChat(profile: ConnectionProfile | undefined) {
 
     setMessages(markInterruptedMessages(storedMessages));
     setTimeline(markUnfinishedTimeline(storedTimeline));
+    setPendingApproval(null);
+    setIsDecidingApproval(false);
     setHydratedProfileId(profile.id);
   }, [profile]);
 
@@ -282,11 +572,12 @@ export function useChat(profile: ConnectionProfile | undefined) {
           next[existingIndex] = {
             ...existing,
             ...event,
-            createdAt: existing.createdAt
+            createdAt: earliestCreatedAt(existing.createdAt, event.createdAt),
+            detail: event.detail ?? existing.detail
           };
         }
       }
-      return next;
+      return sortTimelineEvents(next);
     });
   }, []);
 
@@ -304,14 +595,117 @@ export function useChat(profile: ConnectionProfile | undefined) {
     );
   }, []);
 
+  const registerApprovalRequest = useCallback(
+    (approval: PendingApproval) => {
+      setPendingApproval((current) => {
+        if (current?.id === approval.id) {
+          return {
+            ...current,
+            ...approval,
+            createdAt: earliestCreatedAt(current.createdAt, approval.createdAt),
+            detail: approval.detail ?? current.detail
+          };
+        }
+        return approval;
+      });
+
+      mergeTimelineEvents([
+        {
+          id: `approval-request-${approval.id}`,
+          kind: "system",
+          name: "approval_required",
+          status: "running",
+          createdAt: approval.createdAt,
+          detail: `${approval.action}${approval.detail ? `: ${approval.detail}` : ""}`
+        }
+      ]);
+    },
+    [mergeTimelineEvents]
+  );
+
   const clearConversation = useCallback(() => {
     setMessages([]);
     setTimeline([]);
+    setPendingApproval(null);
+    setIsDecidingApproval(false);
   }, []);
+
+  const respondToApproval = useCallback(
+    async (decision: ApprovalDecision) => {
+      if (!profile || !pendingApproval || isDecidingApproval) {
+        return;
+      }
+
+      setIsDecidingApproval(true);
+      const now = new Date().toISOString();
+      const decisionEventId = createId("approval-decision");
+
+      mergeTimelineEvents([
+        {
+          id: decisionEventId,
+          kind: "system",
+          name: "approval_decision",
+          status: "running",
+          createdAt: now,
+          detail: `${decision.toUpperCase()} ${pendingApproval.action} (${pendingApproval.id})`
+        }
+      ]);
+
+      try {
+        const tokens = await invokeSafe<AuthTokens | null>("load_auth_tokens", {
+          profileId: profile.id
+        });
+        const headers: HeadersInit = {
+          "Content-Type": "application/json"
+        };
+        if (tokens?.accessToken) {
+          headers.Authorization = `Bearer ${tokens.accessToken}`;
+        }
+
+        const response = await fetch(toAbsoluteEndpoint(profile.baseUrl, pendingApproval.endpoint), {
+          method: pendingApproval.method ?? "POST",
+          headers,
+          body: JSON.stringify({
+            approval_id: pendingApproval.id,
+            decision,
+            decided_at: now,
+            user_id: resolveUserId(profile),
+            payload: pendingApproval.payload ?? null
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Approval endpoint returned ${response.status}`);
+        }
+
+        updateTimelineStatus(
+          `approval-request-${pendingApproval.id}`,
+          "success",
+          `Approval ${decision} submitted at ${now}`
+        );
+        updateTimelineStatus(
+          decisionEventId,
+          "success",
+          `Decision recorded: ${decision} (${pendingApproval.id})`
+        );
+        setPendingApproval(null);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to submit approval decision.";
+        updateTimelineStatus(
+          decisionEventId,
+          "error",
+          `Approval ${decision} failed for ${pendingApproval.id}: ${message}`
+        );
+      } finally {
+        setIsDecidingApproval(false);
+      }
+    },
+    [isDecidingApproval, mergeTimelineEvents, pendingApproval, profile, updateTimelineStatus]
+  );
 
   const sendMessage = useCallback(
     async (rawInput: string) => {
-      if (!profile || isSending) {
+      if (!profile || isSending || pendingApproval || isDecidingApproval) {
         return;
       }
 
@@ -445,6 +839,11 @@ export function useChat(profile: ConnectionProfile | undefined) {
             if (parsed.timelineEvents.length > 0) {
               mergeTimelineEvents(parsed.timelineEvents);
             }
+            if (parsed.approvalRequests.length > 0) {
+              for (const request of parsed.approvalRequests) {
+                registerApprovalRequest(request);
+              }
+            }
             appendToAssistant(parsed.text);
 
             if (parsed.done) {
@@ -463,6 +862,11 @@ export function useChat(profile: ConnectionProfile | undefined) {
             if (parsed.timelineEvents.length > 0) {
               mergeTimelineEvents(parsed.timelineEvents);
             }
+            if (parsed.approvalRequests.length > 0) {
+              for (const request of parsed.approvalRequests) {
+                registerApprovalRequest(request);
+              }
+            }
             appendToAssistant(parsed.text);
           }
         }
@@ -477,14 +881,25 @@ export function useChat(profile: ConnectionProfile | undefined) {
         setIsSending(false);
       }
     },
-    [isSending, mergeTimelineEvents, profile, updateTimelineStatus]
+    [
+      isDecidingApproval,
+      isSending,
+      mergeTimelineEvents,
+      pendingApproval,
+      profile,
+      registerApprovalRequest,
+      updateTimelineStatus
+    ]
   );
 
   return {
     messages,
     timeline,
     isSending,
+    pendingApproval,
+    isDecidingApproval,
     hasInterruptedMessages,
+    respondToApproval,
     sendMessage,
     clearConversation
   };

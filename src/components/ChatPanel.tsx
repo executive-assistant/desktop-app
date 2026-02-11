@@ -8,8 +8,17 @@ type ChatPanelProps = {
 
 export function ChatPanel({ profile }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
-  const { messages, timeline, isSending, hasInterruptedMessages, sendMessage, clearConversation } =
-    useChat(profile);
+  const {
+    messages,
+    timeline,
+    isSending,
+    pendingApproval,
+    isDecidingApproval,
+    hasInterruptedMessages,
+    respondToApproval,
+    sendMessage,
+    clearConversation
+  } = useChat(profile);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -34,6 +43,32 @@ export function ChatPanel({ profile }: ChatPanelProps) {
         <p className="warning-text">
           Recovered partial assistant output from an interrupted stream.
         </p>
+      ) : null}
+
+      {pendingApproval ? (
+        <div className="approval-panel">
+          <h3>Approval Required</h3>
+          <p className="subtle-text">
+            Action: <strong>{pendingApproval.action}</strong>
+          </p>
+          {pendingApproval.detail ? <p className="subtle-text">{pendingApproval.detail}</p> : null}
+          <div className="approval-actions">
+            <button
+              type="button"
+              onClick={() => void respondToApproval("approve")}
+              disabled={isDecidingApproval}
+            >
+              {isDecidingApproval ? "Submitting..." : "Approve"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void respondToApproval("reject")}
+              disabled={isDecidingApproval}
+            >
+              {isDecidingApproval ? "Submitting..." : "Reject"}
+            </button>
+          </div>
+        </div>
       ) : null}
 
       <div className="timeline-panel">
@@ -82,10 +117,10 @@ export function ChatPanel({ profile }: ChatPanelProps) {
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           placeholder="Send a message to /message endpoint"
-          disabled={!profile || isSending}
+          disabled={!profile || isSending || Boolean(pendingApproval)}
         />
-        <button type="submit" disabled={!profile || isSending || !draft.trim()}>
-          {isSending ? "Streaming..." : "Send"}
+        <button type="submit" disabled={!profile || isSending || Boolean(pendingApproval) || !draft.trim()}>
+          {pendingApproval ? "Approval Pending" : isSending ? "Streaming..." : "Send"}
         </button>
       </form>
     </section>

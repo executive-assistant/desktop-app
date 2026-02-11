@@ -74,6 +74,58 @@ test("failure path: server 500 marks assistant and timeline as error", async ({ 
   await expect(timelineItem).toContainText("Server returned 500");
 });
 
+test("approval path: backend signal blocks send until user approves", async ({ page }) => {
+  let approvalBody = "";
+
+  await page.route("http://127.0.0.1:8000/message", async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream",
+        "access-control-allow-origin": "*"
+      },
+      body: [
+        "event: approval_required",
+        'data: {"approval_required":true,"approval_id":"appr-e2e-1","action":"delete_file","detail":"Delete README.md?"}',
+        "data: [DONE]",
+        ""
+      ].join("\n")
+    });
+  });
+
+  await page.route("http://127.0.0.1:8000/approval", async (route) => {
+    approvalBody = route.request().postData() ?? "";
+    await route.fulfill({
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*"
+      },
+      body: JSON.stringify({ ok: true })
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Ken Desktop POC" })).toBeVisible();
+
+  await page.getByPlaceholder("Send a message to /message endpoint").fill("trigger approval");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  await expect(page.getByRole("heading", { name: "Approval Required" })).toBeVisible();
+  await expect(page.getByText("Action:")).toContainText("delete_file");
+
+  const sendButton = page.getByRole("button", { name: "Approval Pending" });
+  await expect(sendButton).toBeDisabled();
+
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect.poll(() => approvalBody).toContain('"approval_id":"appr-e2e-1"');
+  await expect.poll(() => approvalBody).toContain('"decision":"approve"');
+
+  await expect(page.getByRole("heading", { name: "Approval Required" })).toHaveCount(0);
+  await expect(page.locator(".timeline-item", { hasText: "approval_required" }).last()).toContainText("success");
+  await expect(page.locator(".timeline-item", { hasText: "approval_decision" }).last()).toContainText("success");
+});
+
 test("recovery path: persisted streaming message is restored as interrupted", async ({ page }) => {
   await page.goto("/");
 
